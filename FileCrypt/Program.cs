@@ -1,7 +1,8 @@
-﻿namespace FileCrypt
+﻿namespace Program
 {
     using CommandLine;
     using Microsoft.AspNetCore.Cryptography.KeyDerivation;
+    using Serilog;
     using System;
     using System.Diagnostics;
     using System.IO;
@@ -28,6 +29,7 @@
 
         internal static void Main(string[] args)
         {
+
             bool encrypting = true;
             bool optionsSet = false;
             string inputFile = String.Empty;
@@ -36,25 +38,50 @@
             byte[] key;
             byte[] iv;
 
+
+            Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.Console()
+            .CreateLogger();
+
+
             Parser.Default.ParseArguments<Options>(args)
                    .WithParsed<Options>(o =>
                    {
+                       if (o.Verbose)
+                       {
+                           Log.Logger = new LoggerConfiguration()
+                            .MinimumLevel.Debug()
+                            .WriteTo.Console()
+                            .CreateLogger();
+                           Log.Information("Verbosity set to high");
+                       }
+                       else
+                       {
+                           Log.Logger = new LoggerConfiguration()
+                           .MinimumLevel.Information()
+                           .WriteTo.Console()
+                           .CreateLogger();
+                       }
+
                        if (!String.IsNullOrEmpty(o.EncryptFile) && !String.IsNullOrEmpty(o.DecryptFile))
                        {
-                           Console.WriteLine("Either Encrypt or Decrypt, not both");
+                           Log.Error("Either Encrypt or Decrypt, not both");
                        }
                        if (String.IsNullOrEmpty(o.EncryptFile) && String.IsNullOrEmpty(o.DecryptFile))
                        {
-                           Console.WriteLine("Either Encrypt or Decrypt, not neither");
+                           Log.Error("Either Encrypt or Decrypt, not neither");
                        }
                        if (!String.IsNullOrEmpty(o.EncryptFile))
                        {
+                           Log.Debug($"File: --{o.EncryptFile}--");
                            inputFile = o.EncryptFile;
                            encrypting = true;
                            optionsSet = true;
                        }
                        else if (!String.IsNullOrEmpty(o.DecryptFile))
                        {
+                           Log.Debug($"File: --{o.EncryptFile}--");
                            inputFile = o.DecryptFile;
                            encrypting = false;
                            optionsSet = true;
@@ -62,7 +89,9 @@
                        if (o.Iterations < 100000)
                        {
                            iterations = DEF_ITERATIONS;
+                           Log.Debug($"Iterations: --{iterations}--");
                        }
+                       Log.Debug($"Passphrase length: --{o.Passphrase.Length}--");
                        pass = o.Passphrase;
                    });
 
@@ -74,16 +103,18 @@
                 {
                     if (encrypting)
                     {
+                        Log.Debug($"Started encrypting file");
                         EncryptFile(inputFile, key, iv);
                     }
                     else
                     {
+                        Log.Debug($"Started decrypting file");
                         DecryptFile(inputFile, key, iv);
                     }
                 }
                 catch (FileNotFoundException)
                 {
-                    Console.WriteLine("Input file was not found");
+                    Log.Error("Input file was not found");
                 }
             }
         }
@@ -95,26 +126,31 @@
             var st = Stopwatch.StartNew();
             byte[] key = KeyDerivation.Pbkdf2(passwordText, Encoding.UTF8.GetBytes(mySalt), KeyDerivationPrf.HMACSHA512, iterations, targetLen);
             st.Stop();
-            Console.WriteLine($"Pbkdf2 took: {st.ElapsedMilliseconds} ms");
+            Log.Debug($"Pbkdf2 took: {st.ElapsedMilliseconds} ms for {targetLen} byte key");
 
             return key;
         }
 
         private static void EncryptFile(string inputFile, byte[] keyBytes, byte[] ivBytes)
         {
-            Console.WriteLine(inputFile);
             if (!File.Exists(inputFile))
             {
                 throw new FileNotFoundException($"inputFile: {inputFile}");
             }
+
             var inptFileName = Path.GetFileName(inputFile);
             var inptPath = Path.GetDirectoryName(inputFile) + Path.DirectorySeparatorChar;
+            if (!Path.IsPathFullyQualified(inputFile))
+            {
+                inptPath = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar;
+            }
             string outputFile = inptPath + MY_PREFIX + inptFileName;
 
             var st = Stopwatch.StartNew();
             using (FileStream inputFileStream = File.Open(inputFile, FileMode.Open))
             using (FileStream outputFileStream = File.Open(outputFile, FileMode.Create))
             {
+                Log.Debug($"File length: --{inputFileStream.Length}--");
                 using (AesCryptoServiceProvider aesCryptoServiceProvider = new AesCryptoServiceProvider())
                 {
                     aesCryptoServiceProvider.KeySize = AES_BITS;
@@ -135,7 +171,7 @@
                 }
             }
             st.Stop();
-            Console.WriteLine($"Encrypt file took: {st.ElapsedMilliseconds / 1000} s");
+            Log.Debug($"Encryption of file took: {st.ElapsedMilliseconds} ms == { st.ElapsedMilliseconds / 1000} s");
         }
 
         private static void DecryptFile(string inputFile, byte[] keyBytes, byte[] ivBytes)
@@ -147,6 +183,10 @@
             }
             var inptFileName = Path.GetFileName(inputFile);
             var inptPath = Path.GetDirectoryName(inputFile) + Path.DirectorySeparatorChar;
+            if (!Path.IsPathFullyQualified(inputFile))
+            {
+                inptPath = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar;
+            }
             string outFileName;
             string outputFile;
             if (inptFileName.Contains(MY_PREFIX))
@@ -163,8 +203,8 @@
             var st = Stopwatch.StartNew();
             using (FileStream inputFileStream = File.Open(inputFile, FileMode.Open))
             using (FileStream outputFileStream = File.Open(outputFile, FileMode.Create))
-
             {
+                Log.Debug($"File length: --{inputFileStream.Length}--");
                 using (AesCryptoServiceProvider aesCryptoServiceProvider = new AesCryptoServiceProvider())
                 {
                     aesCryptoServiceProvider.KeySize = AES_BITS;
@@ -185,7 +225,7 @@
                 }
             }
             st.Stop();
-            Console.WriteLine($"Encrypt file took: {st.ElapsedMilliseconds / 1000} s");
+            Log.Debug($"Decryption of file took: {st.ElapsedMilliseconds} ms == { st.ElapsedMilliseconds / 1000} s");
         }
     }
 }

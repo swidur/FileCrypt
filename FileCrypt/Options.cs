@@ -1,4 +1,4 @@
-﻿namespace FileCrypt
+﻿namespace Program
 {
     using CommandLine;
 
@@ -18,5 +18,8 @@
 
         [Option('i', "iterations", Required = false, HelpText = "Numer of Pbkdf2-HMACSHA512 iterations while deriving key from password - more is better. Min/default value 100 000")]
         public int Iterations { get; set; }
+
+        [Option('v', "verbose", Required = false, HelpText = "Set verbose output")]
+        public bool Verbose { get; set; }
     }
 }
