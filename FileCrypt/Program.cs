@@ -15,17 +15,17 @@
     /// </summary>
     public static class Program
     {
-        internal const string MY_PREFIX = "encrypted_";
+        const int DEF_ITERATIONS = 100000;
 
-        internal const int DEF_ITERATIONS = 100000;
+        const int AES_BITS = 256;
 
-        internal const int AES_BITS = 256;
+        const int AES_BLOCK = 128;
 
-        internal const int AES_BLOCK = 128;
+        const int KEY_SIZE = 32;
 
-        internal const int KEY_SIZE = 32;
+        const int IV_SIZE = 16;
 
-        internal const int IV_SIZE = 16;
+        const int BUFFER_SIZE = 83886080;
 
         internal static void Main(string[] args)
         {
@@ -38,13 +38,6 @@
             string pass = String.Empty;
             byte[] key;
             byte[] iv;
-
-
-            Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
-            .WriteTo.Console()
-            .CreateLogger();
-
 
             Parser.Default.ParseArguments<Options>(args)
                    .WithParsed<Options>(o =>
@@ -68,10 +61,12 @@
                        if (!String.IsNullOrEmpty(o.EncryptFile) && !String.IsNullOrEmpty(o.DecryptFile))
                        {
                            Log.Error("Either Encrypt or Decrypt, not both");
+                           return;
                        }
                        if (String.IsNullOrEmpty(o.EncryptFile) && String.IsNullOrEmpty(o.DecryptFile))
                        {
                            Log.Error("Either Encrypt or Decrypt, not neither");
+                           return;
                        }
                        if (!String.IsNullOrEmpty(o.EncryptFile))
                        {
@@ -99,18 +94,27 @@
 
             if (optionsSet)
             {
+
                 string input = String.Empty;
                 string output = String.Empty;
                 try
                 {
                     (input, output) = FileNameHandler(encrypting, inputOption, outputOption);
                 }
-                catch (Exception)
+                catch (FileNotFoundException e)
                 {
-
+                    Log.Fatal(e.Message);
+                    return;
                 }
+                catch (Exception e)
+                {
+                    Log.Fatal(e.Message);
+                    return;
+                }
+
                 key = DeriveBytesFromText(pass, iterations, KEY_SIZE);
                 iv = DeriveBytesFromText(pass, iterations, IV_SIZE);
+
                 try
                 {
                     if (encrypting)
@@ -121,39 +125,14 @@
                     else
                     {
                         Log.Debug($"Started decrypting file");
-                        EncryptDecrypt(!encrypting, input, output, key, iv);
+                        EncryptDecrypt(encrypting, input, output, key, iv);
                     }
                 }
-                catch (FileNotFoundException)
+                catch (Exception e)
                 {
-                    Log.Error("Input file was not found");
+                    Log.Fatal($"Unhandled exception: {e.Message}");
                 }
             }
-        }
-
-        private static (string, string) FileNameHandler(bool encrypting, string inputFile, string outputFile)
-        {
-            string outPath = outputFile;
-            string enc = "encrypted_";
-            string dec = "decrypted_";
-
-            if (!File.Exists(inputFile)) throw new FileNotFoundException("inputFile: " + inputFile);
-
-            if (string.IsNullOrEmpty(outputFile))
-            {
-                string fileName = Path.GetFileName(inputFile);
-                string path = Path.GetDirectoryName(inputFile) + Path.DirectorySeparatorChar.ToString();
-                if (!Path.IsPathFullyQualified(inputFile))
-                    path = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar.ToString();
-
-                outPath = path + (encrypting ? enc : dec) + fileName;
-            }
-            if (File.Exists(outPath))
-            {
-                throw new AccessViolationException("outputFile already exists: " + outPath);
-            }
-
-            return (inputFile, outPath);
         }
 
         private static void EncryptDecrypt(
@@ -168,7 +147,7 @@
             {
                 using (FileStream outputFileStream = File.Open(outputFile, FileMode.Create))
                 {
-                    Log.Debug(string.Format("File length: --{0}-- kb", (object)(inputFileStream.Length / 1024L)));
+                    Log.Debug($"File length: --{inputFileStream.Length / 1024}-- kb");
                     using (AesCryptoServiceProvider cryptoServiceProvider = new AesCryptoServiceProvider())
                     {
                         cryptoServiceProvider.KeySize = 256;
@@ -176,18 +155,18 @@
                         cryptoServiceProvider.Padding = PaddingMode.PKCS7;
                         cryptoServiceProvider.Key = keyBytes;
                         cryptoServiceProvider.IV = ivBytes;
-                        ICryptoTransform transform = encrypting ? cryptoServiceProvider.CreateEncryptor() : cryptoServiceProvider.CreateDecryptor();
+                        ICryptoTransform transform = encrypting ? cryptoServiceProvider.CreateEncryptor() 
+                            : transform = cryptoServiceProvider.CreateDecryptor();
+                       
                         using (CryptoStream cryptoStream = new CryptoStream(outputFileStream, transform, CryptoStreamMode.Write))
                         {
-                            byte[] buffer = new byte[inputFileStream.Length];
-                            inputFileStream.Read(buffer, 0, buffer.Length);
-                            cryptoStream.Write(buffer, 0, buffer.Length);
+                            inputFileStream.CopyTo(cryptoStream, BUFFER_SIZE);
                         }
                     }
                 }
             }
             stopwatch.Stop();
-            Log.Debug(string.Format("Encryption of file took: {0} ms ~ {1} s", (object)stopwatch.ElapsedMilliseconds, (object)(stopwatch.ElapsedMilliseconds / 1000L)));
+            Log.Debug(string.Format($"Encryption of file took: {stopwatch.ElapsedMilliseconds} ms ~ {stopwatch.ElapsedMilliseconds / 1000} s"));
         }
 
         private static byte[] DeriveBytesFromText(string passwordText, int iterations, int targetLen)
@@ -200,6 +179,31 @@
             Log.Debug($"Pbkdf2 took: {st.ElapsedMilliseconds} ms for {targetLen} byte key");
 
             return key;
+        }
+
+        private static (string, string) FileNameHandler(bool encrypting, string inputFile, string outputFile)
+        {
+            string outPath = outputFile;
+            string enc = "encrypted_";
+            string dec = "decrypted_";
+
+            if (!File.Exists(inputFile)) throw new FileNotFoundException("File not found: inputFile: " + inputFile);
+
+            if (string.IsNullOrEmpty(outputFile))
+            {
+                string fileName = Path.GetFileName(inputFile);
+                string path = Path.GetDirectoryName(inputFile) + Path.DirectorySeparatorChar.ToString();
+                if (!Path.IsPathFullyQualified(inputFile))
+                    path = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar.ToString();
+
+                outPath = path + (encrypting ? enc : dec) + fileName;
+            }
+            if (File.Exists(outPath))
+            {
+                throw new AccessViolationException($"Output file already exists: --{outPath}--");
+            }
+
+            return (inputFile, outPath);
         }
     }
 }
