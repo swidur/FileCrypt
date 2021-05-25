@@ -32,7 +32,8 @@
 
             bool encrypting = true;
             bool optionsSet = false;
-            string inputFile = String.Empty;
+            string inputOption = String.Empty;
+            string outputOption = String.Empty;
             int iterations = DEF_ITERATIONS;
             string pass = String.Empty;
             byte[] key;
@@ -75,14 +76,14 @@
                        if (!String.IsNullOrEmpty(o.EncryptFile))
                        {
                            Log.Debug($"File: --{o.EncryptFile}--");
-                           inputFile = o.EncryptFile;
+                           inputOption = o.EncryptFile;
                            encrypting = true;
                            optionsSet = true;
                        }
                        else if (!String.IsNullOrEmpty(o.DecryptFile))
                        {
                            Log.Debug($"File: --{o.EncryptFile}--");
-                           inputFile = o.DecryptFile;
+                           inputOption = o.DecryptFile;
                            encrypting = false;
                            optionsSet = true;
                        }
@@ -93,10 +94,21 @@
                        }
                        Log.Debug($"Passphrase length: --{o.Passphrase.Length}--");
                        pass = o.Passphrase;
+                       outputOption = o.Output;
                    });
 
             if (optionsSet)
             {
+                string input = String.Empty;
+                string output = String.Empty;
+                try
+                {
+                    (input, output) = FileNameHandler(encrypting, inputOption, outputOption);
+                }
+                catch (Exception)
+                {
+
+                }
                 key = DeriveBytesFromText(pass, iterations, KEY_SIZE);
                 iv = DeriveBytesFromText(pass, iterations, IV_SIZE);
                 try
@@ -104,12 +116,12 @@
                     if (encrypting)
                     {
                         Log.Debug($"Started encrypting file");
-                        EncryptFile(inputFile, key, iv);
+                        EncryptDecrypt(encrypting, input, output, key, iv);
                     }
                     else
                     {
                         Log.Debug($"Started decrypting file");
-                        DecryptFile(inputFile, key, iv);
+                        EncryptDecrypt(!encrypting, input, output, key, iv);
                     }
                 }
                 catch (FileNotFoundException)
@@ -117,6 +129,65 @@
                     Log.Error("Input file was not found");
                 }
             }
+        }
+
+        private static (string, string) FileNameHandler(bool encrypting, string inputFile, string outputFile)
+        {
+            string outPath = outputFile;
+            string enc = "encrypted_";
+            string dec = "decrypted_";
+
+            if (!File.Exists(inputFile)) throw new FileNotFoundException("inputFile: " + inputFile);
+
+            if (string.IsNullOrEmpty(outputFile))
+            {
+                string fileName = Path.GetFileName(inputFile);
+                string path = Path.GetDirectoryName(inputFile) + Path.DirectorySeparatorChar.ToString();
+                if (!Path.IsPathFullyQualified(inputFile))
+                    path = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar.ToString();
+
+                outPath = path + (encrypting ? enc : dec) + fileName;
+            }
+            if (File.Exists(outPath))
+            {
+                throw new AccessViolationException("outputFile already exists: " + outPath);
+            }
+
+            return (inputFile, outPath);
+        }
+
+        private static void EncryptDecrypt(
+          bool encrypting,
+          string inputFile,
+          string outputFile,
+          byte[] keyBytes,
+          byte[] ivBytes)
+        {
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            using (FileStream inputFileStream = File.Open(inputFile, FileMode.Open))
+            {
+                using (FileStream outputFileStream = File.Open(outputFile, FileMode.Create))
+                {
+                    Log.Debug(string.Format("File length: --{0}-- kb", (object)(inputFileStream.Length / 1024L)));
+                    using (AesCryptoServiceProvider cryptoServiceProvider = new AesCryptoServiceProvider())
+                    {
+                        cryptoServiceProvider.KeySize = 256;
+                        cryptoServiceProvider.BlockSize = 128;
+                        cryptoServiceProvider.Padding = PaddingMode.PKCS7;
+                        cryptoServiceProvider.Key = keyBytes;
+                        cryptoServiceProvider.IV = ivBytes;
+                        ICryptoTransform transform = encrypting ? cryptoServiceProvider.CreateEncryptor() : cryptoServiceProvider.CreateDecryptor();
+                        using (CryptoStream cryptoStream = new CryptoStream(outputFileStream, transform, CryptoStreamMode.Write))
+                        {
+                            byte[] buffer = new byte[inputFileStream.Length];
+                            inputFileStream.Read(buffer, 0, buffer.Length);
+                            cryptoStream.Write(buffer, 0, buffer.Length);
+                        }
+                    }
+                }
+            }
+            stopwatch.Stop();
+            Log.Debug(string.Format("Encryption of file took: {0} ms ~ {1} s", (object)stopwatch.ElapsedMilliseconds, (object)(stopwatch.ElapsedMilliseconds / 1000L)));
         }
 
         private static byte[] DeriveBytesFromText(string passwordText, int iterations, int targetLen)
@@ -129,103 +200,6 @@
             Log.Debug($"Pbkdf2 took: {st.ElapsedMilliseconds} ms for {targetLen} byte key");
 
             return key;
-        }
-
-        private static void EncryptFile(string inputFile, byte[] keyBytes, byte[] ivBytes)
-        {
-            if (!File.Exists(inputFile))
-            {
-                throw new FileNotFoundException($"inputFile: {inputFile}");
-            }
-
-            var inptFileName = Path.GetFileName(inputFile);
-            var inptPath = Path.GetDirectoryName(inputFile) + Path.DirectorySeparatorChar;
-            if (!Path.IsPathFullyQualified(inputFile))
-            {
-                inptPath = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar;
-            }
-            string outputFile = inptPath + MY_PREFIX + inptFileName;
-
-            var st = Stopwatch.StartNew();
-            using (FileStream inputFileStream = File.Open(inputFile, FileMode.Open))
-            using (FileStream outputFileStream = File.Open(outputFile, FileMode.Create))
-            {
-                Log.Debug($"File length: --{inputFileStream.Length}--");
-                using (AesCryptoServiceProvider aesCryptoServiceProvider = new AesCryptoServiceProvider())
-                {
-                    aesCryptoServiceProvider.KeySize = AES_BITS;
-                    aesCryptoServiceProvider.BlockSize = AES_BLOCK;
-                    aesCryptoServiceProvider.Padding = PaddingMode.PKCS7;
-
-                    aesCryptoServiceProvider.Key = keyBytes;
-                    aesCryptoServiceProvider.IV = ivBytes;
-
-                    ICryptoTransform cryptoTransform = aesCryptoServiceProvider.CreateEncryptor();
-
-                    using (CryptoStream cryptoStream = new CryptoStream(outputFileStream, cryptoTransform, CryptoStreamMode.Write))
-                    {
-                        byte[] buffer = new byte[inputFileStream.Length];
-                        inputFileStream.Read(buffer, 0, buffer.Length);
-                        cryptoStream.Write(buffer, 0, buffer.Length);
-                    }
-                }
-            }
-            st.Stop();
-            Log.Debug($"Encryption of file took: {st.ElapsedMilliseconds} ms == { st.ElapsedMilliseconds / 1000} s");
-        }
-
-        private static void DecryptFile(string inputFile, byte[] keyBytes, byte[] ivBytes)
-        {
-
-            if (!File.Exists(inputFile))
-            {
-                throw new FileNotFoundException($"inputFile: {inputFile}");
-            }
-            var inptFileName = Path.GetFileName(inputFile);
-            var inptPath = Path.GetDirectoryName(inputFile) + Path.DirectorySeparatorChar;
-            if (!Path.IsPathFullyQualified(inputFile))
-            {
-                inptPath = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar;
-            }
-            string outFileName;
-            string outputFile;
-            if (inptFileName.Contains(MY_PREFIX))
-            {
-                var arr = inptFileName.Split(MY_PREFIX);
-                outFileName = "decrypted_" + arr[^1];
-            }
-            else
-            {
-                outFileName = "decrypted_" + inptFileName;
-            }
-            outputFile = inptPath + outFileName;
-
-            var st = Stopwatch.StartNew();
-            using (FileStream inputFileStream = File.Open(inputFile, FileMode.Open))
-            using (FileStream outputFileStream = File.Open(outputFile, FileMode.Create))
-            {
-                Log.Debug($"File length: --{inputFileStream.Length}--");
-                using (AesCryptoServiceProvider aesCryptoServiceProvider = new AesCryptoServiceProvider())
-                {
-                    aesCryptoServiceProvider.KeySize = AES_BITS;
-                    aesCryptoServiceProvider.BlockSize = AES_BLOCK;
-                    aesCryptoServiceProvider.Padding = PaddingMode.PKCS7;
-                    aesCryptoServiceProvider.Key = keyBytes;
-                    aesCryptoServiceProvider.IV = ivBytes;
-
-                    ICryptoTransform cryptoTransform = aesCryptoServiceProvider.CreateDecryptor();
-
-                    using (CryptoStream cryptoStream = new CryptoStream(outputFileStream, cryptoTransform, CryptoStreamMode.Write))
-                    {
-                        byte[] buffer = new byte[inputFileStream.Length];
-                        inputFileStream.Read(buffer, 0, buffer.Length);
-                        cryptoStream.Write(buffer, 0, buffer.Length);
-                    }
-
-                }
-            }
-            st.Stop();
-            Log.Debug($"Decryption of file took: {st.ElapsedMilliseconds} ms == { st.ElapsedMilliseconds / 1000} s");
         }
     }
 }

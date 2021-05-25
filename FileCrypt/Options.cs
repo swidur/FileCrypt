@@ -13,6 +13,9 @@
         [Option('d', "decrypt", Required = false, Group = "crypt", HelpText = "Decrypt file")]
         public string DecryptFile { get; set; }
 
+        [Option('o', "output", Required = false, HelpText = "Set output file")]
+        public string Output { get; set; }
+
         [Option('p', "passphrase", Required = true, HelpText = "Passphrase")]
         public string Passphrase { get; set; }
 
